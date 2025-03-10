@@ -35,9 +35,30 @@ def generate_random_value(key, results, sample_size=1):
     mu = results[key]["mean"]
     sigma = results[key]["std"]
     random_values = norm.rvs(loc=mu, scale=sigma, size=sample_size)
+    random_values = np.maximum(random_values, 0)
     return random_values.tolist()
 
-def test_generation_duration():
+def duration_difference(dur1,dur2):
+    if max(dur1,dur2) == 0:
+        return 1
+    else:
+        #print(max(dur1,dur2))
+        return abs((dur1-dur2))/max(dur1,dur2)
+
+def generate_duration(span,results):
+    instance = span.instance
+    operation = span.operation
+    key = f"{instance}:{operation}"
+    return generate_random_value(key,results,1)[0]
+
+def test_generation_duration(traces,results):
+    sum_diff=0.0
+    sum_span=0
+    for trace in traces:
+        sum_span+=trace.getSpanNum()
+        for span in trace.getSpans():
+            sum_diff+=duration_difference(generate_duration(span,results),span.duration)
+    print(sum_diff/sum_span)    
 
     
 if __name__ == "__main__":
@@ -82,4 +103,4 @@ if __name__ == "__main__":
         print(f"  样本数量: {res['sample_size']}")
         print("-----------------------")
     
-    test_generation_duration()
+    test_generation_duration(traces,results)
