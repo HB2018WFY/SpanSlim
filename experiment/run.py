@@ -40,11 +40,12 @@ def generate_duration_normalDistribution(key, results, sample_size=1):
     random_values = np.maximum(random_values, 0)
     return random_values.tolist()
 
-def normalDistribution(span,results):
+def Distribution(distName,span,results):
     instance = span.instance
     operation = span.operation
     key = f"{instance}:{operation}"
-    return generate_duration_normalDistribution(key,results,1)[0]
+    if distName=="normal":
+        return generate_duration_normalDistribution(key,results,1)[0]
 
 def duration_difference(dur1,dur2):
     if max(dur1,dur2) == 0:
@@ -53,35 +54,30 @@ def duration_difference(dur1,dur2):
         #print(max(dur1,dur2))
         return abs((dur1-dur2))/max(dur1,dur2)
     
-def test_normalDistribution(traces,results):
+def test_Distribution(distName,traces,results):
     sum_diff=0.0
     sum_span=0
     for trace in traces:
         sum_span+=trace.getSpanNum()
         for span in trace.getSpans():
-            sum_diff+=duration_difference(normalDistribution(span,results),span.duration)
-    print(1-sum_diff/sum_span)    
+            sum_diff+=duration_difference(Distribution(distName,span,results),span.duration)
+    print(f"{distName} distribution similarity:{1-sum_diff/sum_span}")    
 
-def build_normalDistribution(duration_dict):
+def build_Distribution(distName,duration_dict):
     results={}
-    for key, durations in duration_dict.items():
-        # 转换为 numpy 数组
-        data = np.array(durations)
-        # 拟合正态分布参数（均值和标准差）
-        mu, sigma = norm.fit(data)
-        # 存储结果
-        results[key] = {
-            "mean": mu,
-            "std": sigma,
-            "sample_size": len(durations),
-            "data": data  # 可选：保留原始数据用于后续验证
-        }
-    for key, res in results.items():
-        print(f"Key: {key}")
-        print(f"  均值 : {res['mean']:.2f}")
-        print(f"  标准差 : {res['std']:.2f}")
-        print(f"  样本数量: {res['sample_size']}")
-        print("-----------------------")
+    if distName=="normal":
+        for key, durations in duration_dict.items():
+            # 转换为 numpy 数组
+            data = np.array(durations)
+            # 拟合正态分布参数（均值和标准差）
+            mu, sigma = norm.fit(data)
+            # 存储结果
+            results[key] = {
+                "mean": mu,
+                "std": sigma,
+                "sample_size": len(durations),
+                "data": data  # 可选：保留原始数据用于后续验证
+            }
     return results
 
 def show_distribution(duration_dict):
@@ -126,6 +122,14 @@ if __name__ == "__main__":
 
     #真实分布
     #show_distribution(duration_dict)  
+    dists = [
+        "normal",
+        "expon",
+        "gamma",
+        "weibull_min",
+        "lognorm"
+    ]
 
-    results = build_normalDistribution(duration_dict)
-    test_normalDistribution(traces,results)
+    for dist in dists:
+        results = build_Distribution(dist,duration_dict)
+        test_Distribution(dist,traces,results)
