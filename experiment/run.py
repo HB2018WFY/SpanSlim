@@ -3,6 +3,8 @@ import random
 import numpy as np
 import pandas as pd
 import sys
+import matplotlib.pyplot as plt
+import seaborn as sns
 from scipy.stats import norm
 current_dir = os.path.dirname(__file__)  # 获取当前脚本所在目录（如果是文件中使用）
 parent_dir = os.path.abspath(os.path.join(current_dir, '..'))  # 父目录路径
@@ -29,7 +31,7 @@ args = parser.parse_args()
 from collections import Counter
 operation_counter = Counter()
 
-def generate_random_value(key, results, sample_size=1):
+def generate_duration_normalDistribution(key, results, sample_size=1):
     if key not in results:
         raise ValueError(f"Key '{key}' 未在 results 中找到！")
     mu = results[key]["mean"]
@@ -38,51 +40,30 @@ def generate_random_value(key, results, sample_size=1):
     random_values = np.maximum(random_values, 0)
     return random_values.tolist()
 
+def normalDistribution(span,results):
+    instance = span.instance
+    operation = span.operation
+    key = f"{instance}:{operation}"
+    return generate_duration_normalDistribution(key,results,1)[0]
+
 def duration_difference(dur1,dur2):
     if max(dur1,dur2) == 0:
         return 1
     else:
         #print(max(dur1,dur2))
         return abs((dur1-dur2))/max(dur1,dur2)
-
-def generate_duration(span,results):
-    instance = span.instance
-    operation = span.operation
-    key = f"{instance}:{operation}"
-    return generate_random_value(key,results,1)[0]
-
-def test_generation_duration(traces,results):
+    
+def test_normalDistribution(traces,results):
     sum_diff=0.0
     sum_span=0
     for trace in traces:
         sum_span+=trace.getSpanNum()
         for span in trace.getSpans():
-            sum_diff+=duration_difference(generate_duration(span,results),span.duration)
-    print(sum_diff/sum_span)    
+            sum_diff+=duration_difference(normalDistribution(span,results),span.duration)
+    print(1-sum_diff/sum_span)    
 
-    
-if __name__ == "__main__":
-    os.makedirs(args.saveDir, exist_ok=True)
-
-    traces = data_collect(f'{args.dataDir}/{args.dataSet}')
-    
-    #instance_operation_counter = {}
-    duration_dict = {}
-    for trace in traces:
-        for span in trace.getSpans():
-            instance = span.instance
-            operation = span.operation
-            #print(instance,operation,span.service)
-            key = f"{instance}:{operation}"
-            value = span.duration 
-            #instance_operation_counter[key] = instance_operation_counter.get(key, 0) + 1
-            if key not in duration_dict:
-                duration_dict[key] = []
-            duration_dict[key].append(value)    
-    
-    #sorted_counter = sorted(instance_operation_counter.items(), key=lambda x: -x[1])
-                
-    results = {}
+def build_normalDistribution(duration_dict):
+    results={}
     for key, durations in duration_dict.items():
         # 转换为 numpy 数组
         data = np.array(durations)
@@ -95,12 +76,56 @@ if __name__ == "__main__":
             "sample_size": len(durations),
             "data": data  # 可选：保留原始数据用于后续验证
         }
-
     for key, res in results.items():
         print(f"Key: {key}")
         print(f"  均值 : {res['mean']:.2f}")
         print(f"  标准差 : {res['std']:.2f}")
         print(f"  样本数量: {res['sample_size']}")
         print("-----------------------")
+    return results
+
+def show_distribution(duration_dict):
+     for key, durations in duration_dict.items():
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        #直方图 
+        sns.histplot(
+            durations,
+            kde=True,
+            ax=ax1,
+            color="skyblue",
+            edgecolor="black"
+        )
+        ax1.set_title(f"Duration Distribution for {key}")
+        ax1.set_xlabel("Duration (ms)")
+        ax1.set_ylabel("Frequency")
+        plt.tight_layout()
+        plt.show()
+
+def make_durationDict(traces):
+    duration_dict = {}
+    for trace in traces:
+        for span in trace.getSpans():
+            instance = span.instance
+            operation = span.operation
+            #print(instance,operation,span.service)
+            key = f"{instance}:{operation}"
+            value = span.duration 
+            #instance_operation_counter[key] = instance_operation_counter.get(key, 0) + 1
+            if key not in duration_dict:
+                duration_dict[key] = []
+            duration_dict[key].append(value)    
+    return duration_dict
+
+if __name__ == "__main__":
+    os.makedirs(args.saveDir, exist_ok=True)
+
+    traces = data_collect(f'{args.dataDir}/{args.dataSet}')
     
-    test_generation_duration(traces,results)
+    #instance_operation_counter = {}
+    duration_dict=make_durationDict(traces)
+
+    #真实分布
+    #show_distribution(duration_dict)  
+
+    results = build_normalDistribution(duration_dict)
+    test_normalDistribution(traces,results)
