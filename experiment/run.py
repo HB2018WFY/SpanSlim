@@ -59,8 +59,10 @@ def generate_random_value(span,results):
     elif dist_type == "gamma":
         shape = params["shape"]
         scale = params["scale"]
-        #print(scale)
-        return gamma.rvs(shape, scale=max(0.00001,scale), size=1)[0]
+        if scale<=0 or np.isnan(scale):
+            return 0 
+        else:
+            return gamma.rvs(shape, scale=scale, size=1)[0]
     elif dist_type == "weibull_min":
         shape = params["shape"]
         scale = params["scale"]
@@ -226,7 +228,7 @@ if __name__ == "__main__":
     dists = [
         "normal",
         "expon",
-        #"gamma",
+        "gamma",
         "weibull_min",
         "lognorm"
     ]
