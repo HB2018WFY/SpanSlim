@@ -5,7 +5,7 @@ import pandas as pd
 import sys
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy.stats import norm, expon, gamma, weibull_min, lognorm
+from scipy.stats import norm, expon, gamma, weibull_min, lognorm, truncnorm
 current_dir = os.path.dirname(__file__)  # 获取当前脚本所在目录（如果是文件中使用）
 parent_dir = os.path.abspath(os.path.join(current_dir, '..'))  # 父目录路径
 sys.path.append(parent_dir) 
@@ -27,6 +27,14 @@ parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--sampleRate', type=float, default=0.1)
 args = parser.parse_args()
 
+def isError(span):
+    if args.dataSet in ['hipster-more', 'hipster-less']:
+        if span.statusCode not in [0, 200, 302, np.nan, 1]:
+            return True
+    elif args.dataSet in ['media', 'socialNetwork']:
+        if span.statusCode not in [200, 302, np.nan]:
+            return True
+    return False
 
 from collections import Counter
 operation_counter = Counter()
@@ -40,7 +48,7 @@ def generate_duration_normalDistribution(key, results, sample_size=1):
     random_values = np.maximum(random_values, 0)
     return random_values.tolist()
 
-def generate_random_value(span,results):
+def generate_random_value(span, results, l=0.0, r=float('inf')):
     instance = span.instance
     operation = span.operation
     key = f"{instance}:{operation}"
@@ -48,35 +56,76 @@ def generate_random_value(span,results):
     dist_type = dist_info["distribution"]
     params = dist_info["params"]
     
+    # 参数校验
+    if l > r:
+        raise ValueError("参数错误：l 必须小于等于 r")
+    
     if dist_type == "normal":
         mu = params["mu"]
         sigma = params["sigma"]
-        return norm.rvs(mu, sigma, size=1)[0]
+        # 截断正态分布
+        if sigma == 0:
+            sigma = 1e-9  # 设置极小值
+        a = (l - mu) / sigma
+        b = (r - mu) / sigma
+        return truncnorm.rvs(a, b, loc=mu, scale=sigma, size=1)[0]
     elif dist_type == "expon":
         lambd = params["lambda"]
         scale = 1 / lambd
-        return expon.rvs(scale=scale, size=1)[0]
+        # 指数分布的上限 r 必须 >= 0，且自然范围是 [0, ∞)
+        if l < 0:
+            raise ValueError("指数分布的 l 必须 >= 0")
+        # 截断到 [l, r]
+        # 计算截断后的概率归一化因子
+        Z = expon.cdf(r, scale=scale) - expon.cdf(l, scale=scale)
+        if Z <= 0:
+            raise ValueError(f"区间 [{l}, {r}] 与指数分布无重叠")
+        # 生成均匀分布的随机数，反向采样
+        u = np.random.uniform(expon.cdf(l, scale=scale), 
+                             expon.cdf(r, scale=scale))
+        return expon.ppf(u, scale=scale)
     elif dist_type == "gamma":
         shape = params["shape"]
         scale = params["scale"]
-        if scale<=0 or np.isnan(scale):
-            return 0 
-        else:
-            return gamma.rvs(shape, scale=scale, size=1)[0]
+        if scale <= 0 or np.isnan(scale):
+            if l <= 0 <= r:
+                return 0.0
+            else:
+                raise ValueError("参数无效且 0 不在区间内")
+        # Gamma 分布的自然范围是 [0, ∞)，截断到 [l, r]
+        # 使用 scipy 的截断方法或自定义实现
+        # 这里用 rejection sampling（效率可能较低，但保证正确性）
+        while True:
+            value = gamma.rvs(shape, scale=scale, size=1)[0]
+            if l <= value <= r:
+                break
+        return value
     elif dist_type == "weibull_min":
         shape = params["shape"]
         scale = params["scale"]
-        return weibull_min.rvs(shape, scale=scale, size=1)[0]
+        # Weibull 分布的自然范围是 [0, ∞)，截断到 [l, r]
+        # 同样用 rejection sampling
+        while True:
+            value = weibull_min.rvs(shape, scale=scale, size=1)[0]
+            if l <= value <= r:
+                break
+        return value
     elif dist_type == "lognorm":
         mu_log = params["mu_log"]
         sigma_log = params["sigma_log"]
-        # lognorm 的参数 s=sigma_log, scale=np.exp(mu_log)
+        if mu_log <= 0 or sigma_log <= 0:
+            if l <= 0 <= r:
+                return 0.0
+            else:
+                raise ValueError("参数无效且 0 不在区间内")
         scale = np.exp(mu_log)
-        #print(f"mu_log={mu_log}, sigma_log={sigma_log}, scale={scale}")
-        if mu_log<=0 or sigma_log<=0:
-            return 0
-        else:
-            return lognorm.rvs(s=sigma_log, scale=np.exp(mu_log), size=1)[0]
+        # 对数正态分布的自然范围是 [0, ∞)，截断到 [l, r]
+        # 使用 rejection sampling
+        while True:
+            value = lognorm.rvs(s=sigma_log, scale=scale, size=1)[0]
+            if l <= value <= r:
+                break
+        return value
     else:
         raise ValueError(f"未知的分布类型: {dist_type}")
 
@@ -90,12 +139,17 @@ def duration_difference(dur1,dur2):
 def test_Distribution(distName,traces,results):
     sum_diff=0.0
     sum_span=0
+    sum_error_span=0
     for trace in traces:
         sum_span+=trace.getSpanNum()
         for span in trace.getSpans():
-            generated_duration = max(0,generate_random_value(span,results))
-            sum_diff+=duration_difference(generated_duration,span.duration)
-    print(f"{distName} distribution similarity:{1-sum_diff/sum_span}")    
+            if not isError(span):
+                generated_duration = max(0,generate_random_value(span,results))
+                sum_diff+=duration_difference(generated_duration,span.duration)
+            else:
+                sum_error_span+=1
+    print(f"sum_span:{sum_span} sum_error_span:{sum_error_span} sum_normal_span:{sum_span-sum_error_span}")
+    print(f"{distName} distribution similarity:{1-sum_diff/(sum_span-sum_error_span)}")    
 
 def build_Distribution(distName,duration_dict):
     results = {}
@@ -120,7 +174,11 @@ def build_Distribution(distName,duration_dict):
             # 指数分布：速率参数（lambda）
             # expon.fit 返回 (loc, scale)，其中 scale = 1/lambda，强制 loc=0
             loc, scale = expon.fit(data, floc=0)
-            lambd = 1 / scale  # 速率参数 lambda = 1/scale
+
+            epsilon = 1e-9  # 定义一个极小值（如 0.000000001）
+            scale = max(scale, epsilon)  # 确保 scale 至少为 epsilon
+            lambd = 1 / scale
+
             results[key] = {
                 "distribution": "expon",
                 "params": {
@@ -200,19 +258,29 @@ def show_distribution(duration_dict):
         plt.tight_layout()
         plt.show()
 
+def get_key(span):
+    instance = span.instance
+    operation = span.operation
+    #print(instance,operation,span.service)
+    key = f"{instance}:{operation}"
+    return key
+
 def make_durationDict(traces):
     duration_dict = {}
     for trace in traces:
+        #print(f"trace.isError={trace.isError}")
         for span in trace.getSpans():
-            instance = span.instance
-            operation = span.operation
-            #print(instance,operation,span.service)
-            key = f"{instance}:{operation}"
+            #print(span.statusCode)
+            span.key=get_key(span)
+            key=span.key
             value = span.duration 
             #instance_operation_counter[key] = instance_operation_counter.get(key, 0) + 1
-            if key not in duration_dict:
-                duration_dict[key] = []
-            duration_dict[key].append(value)    
+            if not isError(span):
+                if span.key not in duration_dict:
+                    duration_dict[key] = []
+                duration_dict[key].append(value)    
+    
+    #print(duration_dict)
     return duration_dict
 
 if __name__ == "__main__":
