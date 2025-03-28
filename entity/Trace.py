@@ -104,7 +104,8 @@ class Trace:
             if span.getParentId() == spanId:
                 childs.append(span)
         return childs
-        
+        #shit code
+
     def serialize(trace):
         traceDict = copy.deepcopy(trace.__dict__)
         spansDict = []

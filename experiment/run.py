@@ -29,6 +29,7 @@ args = parser.parse_args()
 
 def isError(span):
     if args.dataSet in ['hipster-more', 'hipster-less']:
+        #print(f"span.statusCode:{span.statusCode}")
         if span.statusCode not in [0, 200, 302, np.nan, 1]:
             return True
     elif args.dataSet in ['media', 'socialNetwork']:
@@ -38,7 +39,7 @@ def isError(span):
 
 from collections import Counter
 operation_counter = Counter()
-
+'''
 def generate_duration_normalDistribution(key, results, sample_size=1):
     if key not in results:
         raise ValueError(f"Key '{key}' 未在 results 中找到！")
@@ -47,7 +48,7 @@ def generate_duration_normalDistribution(key, results, sample_size=1):
     random_values = norm.rvs(loc=mu, scale=sigma, size=sample_size)
     random_values = np.maximum(random_values, 0)
     return random_values.tolist()
-
+'''
 def generate_random_value(span, results, l=0.0, r=float('inf')):
     instance = span.instance
     operation = span.operation
@@ -56,34 +57,33 @@ def generate_random_value(span, results, l=0.0, r=float('inf')):
     dist_type = dist_info["distribution"]
     params = dist_info["params"]
     
-    # 参数校验
     if l > r:
-        raise ValueError("参数错误：l 必须小于等于 r")
+        return 0.0
+    
+    # 参数校验
+    if l < 0 and dist_type in ["expon", "gamma", "weibull_min", "lognorm"]:
+        raise ValueError(f"{dist_type}分布的l必须>=0")
     
     if dist_type == "normal":
         mu = params["mu"]
         sigma = params["sigma"]
-        # 截断正态分布
         if sigma == 0:
             sigma = 1e-9  # 设置极小值
         a = (l - mu) / sigma
         b = (r - mu) / sigma
-        return truncnorm.rvs(a, b, loc=mu, scale=sigma, size=1)[0]
+        return truncnorm(a, b, loc=mu, scale=sigma).rvs()
+    
     elif dist_type == "expon":
         lambd = params["lambda"]
         scale = 1 / lambd
-        # 指数分布的上限 r 必须 >= 0，且自然范围是 [0, ∞)
-        if l < 0:
-            raise ValueError("指数分布的 l 必须 >= 0")
         # 截断到 [l, r]
-        # 计算截断后的概率归一化因子
-        Z = expon.cdf(r, scale=scale) - expon.cdf(l, scale=scale)
-        if Z <= 0:
+        cdf_l = expon.cdf(l, scale=scale)
+        cdf_r = expon.cdf(r, scale=scale)
+        if cdf_r - cdf_l < 1e-9:
             raise ValueError(f"区间 [{l}, {r}] 与指数分布无重叠")
-        # 生成均匀分布的随机数，反向采样
-        u = np.random.uniform(expon.cdf(l, scale=scale), 
-                             expon.cdf(r, scale=scale))
+        u = np.random.uniform(cdf_l, cdf_r)
         return expon.ppf(u, scale=scale)
+    
     elif dist_type == "gamma":
         shape = params["shape"]
         scale = params["scale"]
@@ -92,71 +92,119 @@ def generate_random_value(span, results, l=0.0, r=float('inf')):
                 return 0.0
             else:
                 raise ValueError("参数无效且 0 不在区间内")
-        # Gamma 分布的自然范围是 [0, ∞)，截断到 [l, r]
-        # 使用 scipy 的截断方法或自定义实现
-        # 这里用 rejection sampling（效率可能较低，但保证正确性）
-        while True:
-            value = gamma.rvs(shape, scale=scale, size=1)[0]
-            if l <= value <= r:
-                break
-        return value
+        # 使用截断伽马分布
+        a = l / scale  # 截断参数转换（Gamma 分布的 loc=0）
+        b = r / scale
+        return gamma.ppf(np.random.uniform(gamma.cdf(a, shape),
+                                           gamma.cdf(b, shape)),
+                         shape) * scale
+    
     elif dist_type == "weibull_min":
         shape = params["shape"]
         scale = params["scale"]
         # Weibull 分布的自然范围是 [0, ∞)，截断到 [l, r]
-        # 同样用 rejection sampling
-        while True:
-            value = weibull_min.rvs(shape, scale=scale, size=1)[0]
-            if l <= value <= r:
-                break
-        return value
+        cdf_l = weibull_min.cdf(l, shape, scale=scale)
+        cdf_r = weibull_min.cdf(r, shape, scale=scale)
+        if cdf_r - cdf_l < 1e-9:
+            raise ValueError(f"区间 [{l}, {r}] 与 Weibull 分布无重叠")
+        u = np.random.uniform(cdf_l, cdf_r)
+        return weibull_min.ppf(u, shape, scale=scale)
+    
     elif dist_type == "lognorm":
         mu_log = params["mu_log"]
         sigma_log = params["sigma_log"]
-        if mu_log <= 0 or sigma_log <= 0:
-            if l <= 0 <= r:
-                return 0.0
-            else:
-                raise ValueError("参数无效且 0 不在区间内")
-        scale = np.exp(mu_log)
-        # 对数正态分布的自然范围是 [0, ∞)，截断到 [l, r]
-        # 使用 rejection sampling
-        while True:
-            value = lognorm.rvs(s=sigma_log, scale=scale, size=1)[0]
-            if l <= value <= r:
-                break
-        return value
+        if sigma_log <= 0:
+            sigma_log = 1e-9
+        # 对数正态分布的截断：转换到正态分布空间
+        lower = np.log(l) if l > 0 else -np.inf
+        upper = np.log(r)
+        a = (lower - mu_log) / sigma_log
+        b = (upper - mu_log) / sigma_log
+        log_val = truncnorm(a, b, loc=mu_log, scale=sigma_log).rvs()
+        return np.exp(log_val)
+    
     else:
         raise ValueError(f"未知的分布类型: {dist_type}")
 
-def duration_difference(dur1,dur2):
+def difference(dur1,dur2):
     if max(dur1,dur2) == 0:
         return 0
     else:
         #print(max(dur1,dur2))
         return abs((dur1-dur2))/max(dur1,dur2)
-    
-def test_Distribution(distName,traces,results):
-    sum_diff=0.0
+
+def dfs_rebuild_duration(node,childs,results,l=0.0, r=float('inf')):
+    rebuild_duration=0.0
+    sum_duration_diff=0.0
+    son_duration=0.0  #son limit
+    if node.getParentId()=='-1'or isError(node):
+        rebuild_duration=node.duration
+    else:
+        for son in childs[node.getSpanId()]:
+            if(isError(son)):
+                son_duration+=son.duration
+        rebuild_duration=max(0,generate_random_value(node,results,max(l,son_duration),r))     
+
+    sum_duration_diff+=difference(rebuild_duration,node.duration)
+
+    free_duration=rebuild_duration-son_duration
+    for son in childs[node.getSpanId()]:
+        if(isError(son)):
+            son_duration_diff,_=dfs_rebuild_duration(son,childs,results)
+            sum_duration_diff+=son_duration_diff
+        else:
+            son_duration_diff,son_rebuild_duration=dfs_rebuild_duration(son,childs,results,0,free_duration)
+            free_duration-=son_rebuild_duration
+            sum_duration_diff+=son_duration_diff
+
+    #print(sum_duration_diff)
+    return sum_duration_diff,rebuild_duration
+
+def dfs_rebuild_latency(node,childs,results,l=0.0, r=float('inf')):
+    rebuild_latency=0.0
+    sum_latency_diff=0.0
+    return sum_latency_diff,rebuild_latency
+
+
+def build_childs(trace):
+    childs={}
+    for span in trace.getSpans():
+        if span.spanId not in childs:
+            childs[span.spanId]=[]
+        parent_id=span.getParentId()
+        if parent_id!='-1': #not root
+            if parent_id not in childs:
+                childs[parent_id]=[]
+            childs[parent_id].append(span)    
+    return childs
+
+def test_Distribution(distName,traces,duration_results,latency_results):
+    sum_duration_diff=0.0
+    sum_latency_diff=0.0
     sum_span=0
     sum_error_span=0
     for trace in traces:
         sum_span+=trace.getSpanNum()
+        root=trace.getRoot()
+        childs=build_childs(trace)
         for span in trace.getSpans():
-            if not isError(span):
-                generated_duration = max(0,generate_random_value(span,results))
-                sum_diff+=duration_difference(generated_duration,span.duration)
-            else:
+            if isError(span):
                 sum_error_span+=1
-    print(f"sum_span:{sum_span} sum_error_span:{sum_error_span} sum_normal_span:{sum_span-sum_error_span}")
-    print(f"{distName} distribution similarity:{1-sum_diff/(sum_span-sum_error_span)}")    
+        duration_diff,_=dfs_rebuild_duration(root,childs,duration_results)
+        latency_diff,_=dfs_rebuild_latency(root,childs,latency_results) #Todo
+        sum_duration_diff+=duration_diff
+        sum_latency_diff+=latency_diff
 
-def build_Distribution(distName,duration_dict):
+    print(f"sum_span:{sum_span} sum_error_span:{sum_error_span} sum_normal_span:{sum_span-sum_error_span}")
+    print(f"{distName} distribution duration similarity:{1-sum_duration_diff/(sum_span-sum_error_span)}")    
+    print(f"{distName} distribution latency similarity:{1-sum_latency_diff/(sum_span-sum_error_span)}")    
+    
+
+def build_Distribution(distName, value_dict):
     results = {}
 
-    for key, durations in duration_dict.items():
-        data = np.array(durations)
-        #print(distName)
+    for key, values in value_dict.items():
+        data = np.array(values)
         if distName == "normal":
             # 正态分布：均值（mu）和标准差（sigma）
             mu, sigma = norm.fit(data)
@@ -166,15 +214,12 @@ def build_Distribution(distName,duration_dict):
                     "mu": mu,
                     "sigma": sigma
                 },
-                "sample_size": len(durations),
+                "sample_size": len(values),
                 "data": data
             }
-            #print(key,results[key])
         elif distName == "expon":
             # 指数分布：速率参数（lambda）
-            # expon.fit 返回 (loc, scale)，其中 scale = 1/lambda，强制 loc=0
             loc, scale = expon.fit(data, floc=0)
-
             epsilon = 1e-9  # 定义一个极小值（如 0.000000001）
             scale = max(scale, epsilon)  # 确保 scale 至少为 epsilon
             lambd = 1 / scale
@@ -184,18 +229,14 @@ def build_Distribution(distName,duration_dict):
                 "params": {
                     "lambda": lambd
                 },
-                "sample_size": len(durations),
+                "sample_size": len(values),
                 "data": data
             }
-            
         elif distName == "gamma":
             # 伽马分布：形状参数（shape）和尺度参数（scale）
-            # gamma.fit 返回 (shape, loc, scale)，强制 loc=0
             clean_data = [x for x in data if x > 0]
-            # 设置初始猜测值（例如 shape=1, scale=mean(clean_data)）
             initial_guess = (1, 0, np.mean(clean_data))
             shape, loc, scale = gamma.fit(clean_data, floc=0)
-
             
             results[key] = {
                 "distribution": "gamma",
@@ -203,13 +244,11 @@ def build_Distribution(distName,duration_dict):
                     "shape": shape,
                     "scale": scale
                 },
-                "sample_size": len(durations),
+                "sample_size": len(values),
                 "data": data
             }
-            
         elif distName == "weibull_min":
             # 威布尔分布：形状参数（shape）和尺度参数（scale）
-            # weibull_min.fit 返回 (shape, loc, scale)，强制 loc=0
             shape, loc, scale = weibull_min.fit(data, floc=0)
             results[key] = {
                 "distribution": "weibull_min",
@@ -217,14 +256,12 @@ def build_Distribution(distName,duration_dict):
                     "shape": shape,
                     "scale": scale
                 },
-                "sample_size": len(durations),
+                "sample_size": len(values),
                 "data": data
             }
-            
         elif distName == "lognorm":
             # 对数正态分布：对数均值（mu_log）和对数标准差（sigma_log）
             clean_data = np.array([x for x in data if x > 0])
-
             log_data = np.log(clean_data)
             mu_log = np.mean(log_data)
             sigma_log = np.std(log_data)
@@ -235,12 +272,13 @@ def build_Distribution(distName,duration_dict):
                     "mu_log": mu_log,
                     "sigma_log": sigma_log
                 },
-                "sample_size": len(durations),
+                "sample_size": len(values),
                 "data": data
             }
         else:
             raise ValueError(f"未知的分布类型: {distName}")
     return results
+'''
 def show_distribution(duration_dict):
      for key, durations in duration_dict.items():
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
@@ -257,7 +295,7 @@ def show_distribution(duration_dict):
         ax1.set_ylabel("Frequency")
         plt.tight_layout()
         plt.show()
-
+'''
 def get_key(span):
     instance = span.instance
     operation = span.operation
@@ -265,32 +303,40 @@ def get_key(span):
     key = f"{instance}:{operation}"
     return key
 
-def make_durationDict(traces):
-    duration_dict = {}
+def make_metric_dict(traces, metric_type):
+    """
+    根据传入的 metric_type 生成对应的字典：
+    - 'duration': 收集 span 的 duration 值
+    - 'latency': 收集 span 的 latency 值
+    """
+    metric_dict = {}
     for trace in traces:
-        #print(f"trace.isError={trace.isError}")
         for span in trace.getSpans():
-            #print(span.statusCode)
-            span.key=get_key(span)
-            key=span.key
-            value = span.duration 
-            #instance_operation_counter[key] = instance_operation_counter.get(key, 0) + 1
-            if not isError(span):
-                if span.key not in duration_dict:
-                    duration_dict[key] = []
-                duration_dict[key].append(value)    
+            if isError(span):
+                continue  # 跳过错误 span
+            
+            key = get_key(span)
+            if metric_type == 'duration':
+                value = span.duration
+            elif metric_type == 'latency':
+                value = span.latency  # 假设 span 有该属性
+            else:
+                raise ValueError(f"Unsupported metric_type: {metric_type}")
+            
+            if key not in metric_dict:
+                metric_dict[key] = []
+            metric_dict[key].append(value)
     
-    #print(duration_dict)
-    return duration_dict
+    return metric_dict
+
+def build_latency(traces):
+    pass
 
 if __name__ == "__main__":
     os.makedirs(args.saveDir, exist_ok=True)
 
     traces = data_collect(f'{args.dataDir}/{args.dataSet}')
     
-    #instance_operation_counter = {}
-    duration_dict=make_durationDict(traces)
-
     #真实分布
     #show_distribution(duration_dict)  
     dists = [
@@ -301,7 +347,13 @@ if __name__ == "__main__":
         "lognorm"
     ]
 
+    build_latency(traces)
+    duration_dict=make_metric_dict(traces,'duration')
+    latency_dict=make_metric_dict(traces,"latency")
+
     for dist in dists:
-        results = build_Distribution(dist,duration_dict)
+        results_duration = build_Distribution(dist,duration_dict)
+        results_latency = build_Distribution(dist,latency_dict)
+        
         #print(results)
-        test_Distribution(dist,traces,results)
+        test_Distribution(dist,traces,results_duration,results_latency)
