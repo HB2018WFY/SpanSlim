@@ -13,6 +13,7 @@ class Span:
         self.instance = str(instance)
         self.service = str(service)
         self.operation = str(operation)
+        self.latency=0
     
     def getElapsedTime(self):
         return self.duration

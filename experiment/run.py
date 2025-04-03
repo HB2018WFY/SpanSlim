@@ -80,7 +80,7 @@ def generate_random_value(span, results, l=0.0, r=float('inf')):
         cdf_l = expon.cdf(l, scale=scale)
         cdf_r = expon.cdf(r, scale=scale)
         if cdf_r - cdf_l < 1e-9:
-            raise ValueError(f"区间 [{l}, {r}] 与指数分布无重叠")
+            return 0
         u = np.random.uniform(cdf_l, cdf_r)
         return expon.ppf(u, scale=scale)
     
@@ -89,9 +89,9 @@ def generate_random_value(span, results, l=0.0, r=float('inf')):
         scale = params["scale"]
         if scale <= 0 or np.isnan(scale):
             if l <= 0 <= r:
-                return 0.0
+                return 0
             else:
-                raise ValueError("参数无效且 0 不在区间内")
+                raise 0
         # 使用截断伽马分布
         a = l / scale  # 截断参数转换（Gamma 分布的 loc=0）
         b = r / scale
@@ -106,7 +106,7 @@ def generate_random_value(span, results, l=0.0, r=float('inf')):
         cdf_l = weibull_min.cdf(l, shape, scale=scale)
         cdf_r = weibull_min.cdf(r, shape, scale=scale)
         if cdf_r - cdf_l < 1e-9:
-            raise ValueError(f"区间 [{l}, {r}] 与 Weibull 分布无重叠")
+            return 0
         u = np.random.uniform(cdf_l, cdf_r)
         return weibull_min.ppf(u, shape, scale=scale)
     
@@ -164,19 +164,26 @@ def dfs_rebuild_latency(node,childs,results,l=0.0, r=float('inf')):
     rebuild_latency=0.0
     sum_latency_diff=0.0
     return sum_latency_diff,rebuild_latency
-
+                                          
 
 def build_childs(trace):
-    childs={}
+    childs = {}
     for span in trace.getSpans():
         if span.spanId not in childs:
-            childs[span.spanId]=[]
-        parent_id=span.getParentId()
-        if parent_id!='-1': #not root
+            childs[span.spanId] = []
+        parent_id = span.getParentId()
+        if parent_id != '-1':  # 非根节点
             if parent_id not in childs:
-                childs[parent_id]=[]
-            childs[parent_id].append(span)    
+                childs[parent_id] = []
+            childs[parent_id].append(span)
+    
+    # 对每个父节点的子节点列表按 startTime 排序
+    for parent_id in childs:
+        # 使用 lambda 表达式按 startTime 排序
+        childs[parent_id].sort(key=lambda s: s.startTime)
+    
     return childs
+
 
 def test_Distribution(distName,traces,duration_results,latency_results):
     sum_duration_diff=0.0
@@ -191,14 +198,13 @@ def test_Distribution(distName,traces,duration_results,latency_results):
             if isError(span):
                 sum_error_span+=1
         duration_diff,_=dfs_rebuild_duration(root,childs,duration_results)
-        latency_diff,_=dfs_rebuild_latency(root,childs,latency_results) #Todo
+        #latency_diff,_=dfs_rebuild_latency(root,childs,latency_results) #Todo
         sum_duration_diff+=duration_diff
-        sum_latency_diff+=latency_diff
+        #sum_latency_diff+=latency_diff
 
     print(f"sum_span:{sum_span} sum_error_span:{sum_error_span} sum_normal_span:{sum_span-sum_error_span}")
     print(f"{distName} distribution duration similarity:{1-sum_duration_diff/(sum_span-sum_error_span)}")    
     print(f"{distName} distribution latency similarity:{1-sum_latency_diff/(sum_span-sum_error_span)}")    
-    
 
 def build_Distribution(distName, value_dict):
     results = {}
@@ -311,7 +317,10 @@ def make_metric_dict(traces, metric_type):
     """
     metric_dict = {}
     for trace in traces:
+        latency_dict=trace.latency_dict
+        #print(len(latency_dict))
         for span in trace.getSpans():
+            #print(span.getParentId(),span.latency)
             if isError(span):
                 continue  # 跳过错误 span
             
@@ -319,7 +328,10 @@ def make_metric_dict(traces, metric_type):
             if metric_type == 'duration':
                 value = span.duration
             elif metric_type == 'latency':
-                value = span.latency  # 假设 span 有该属性
+             #   print(span.parentSpanId)
+                value = latency_dict[span.getSpanId()]  # 假设 span 有该属性
+               # print(value)
+              #  print(span.parentSpanId,value)
             else:
                 raise ValueError(f"Unsupported metric_type: {metric_type}")
             
@@ -330,7 +342,24 @@ def make_metric_dict(traces, metric_type):
     return metric_dict
 
 def build_latency(traces):
-    pass
+    latency_dict = {}  # 存储 spanId 到 latency 的映射
+    for trace in traces:
+        childs=build_childs(trace)
+        for span in trace.getSpans():
+            #print(span.getParentId())
+            if span.getParentId() == '-1':
+                #print(span.getSpanId(),"wa")
+                latency_dict[span.getSpanId()]=0
+            #print(span.getParentId())
+            previous_end = span.startTime
+            for child in childs[span.getSpanId()]:
+                #print(child)
+                latency = child.startTime - previous_end
+                latency_dict[child.getSpanId()] = latency  # 存入字典
+                previous_end = child.startTime + child.duration
+                
+        trace.latency_dict=latency_dict  # 返回字典供后续使用
+
 
 if __name__ == "__main__":
     os.makedirs(args.saveDir, exist_ok=True)
