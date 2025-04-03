@@ -146,7 +146,7 @@ def dfs_rebuild_duration(node,childs,results,l=0.0, r=float('inf')):
         rebuild_duration=max(0,generate_random_value(node,results,max(l,son_duration),r))     
 
     sum_duration_diff+=difference(rebuild_duration,node.duration)
-
+    #print(f"duration:{node.duration},rebuild:{rebuild_duration}")
     free_duration=rebuild_duration-son_duration
     for son in childs[node.getSpanId()]:
         if(isError(son)):
@@ -160,9 +160,30 @@ def dfs_rebuild_duration(node,childs,results,l=0.0, r=float('inf')):
     #print(sum_duration_diff)
     return sum_duration_diff,rebuild_duration
 
-def dfs_rebuild_latency(node,childs,results,l=0.0, r=float('inf')):
+def dfs_rebuild_latency(node,childs,results,latency_dict,l=0.0, r=float('inf')):
     rebuild_latency=0.0
     sum_latency_diff=0.0
+    son_duration_and_latency=0.0  #son limit
+    if node.getParentId()=='-1'or isError(node):
+        rebuild_latency=latency_dict[node.getSpanId()]
+    else:
+        for son in childs[node.getSpanId()]:
+            if(isError(son)):
+                son_duration_and_latency+=son.duration+latency_dict[son.getSpanId()]
+        rebuild_latency=max(0,generate_random_value(node,results,max(l,son_duration_and_latency),r))     
+
+    sum_latency_diff+=difference(rebuild_latency,latency_dict[node.getSpanId()])
+    #print(f"latency:{latency_dict[node.getSpanId()]},rebuild:{rebuild_latency}")
+
+    free_latency=node.duration-son_duration_and_latency
+    for son in childs[node.getSpanId()]:
+        if(isError(son)):
+            son_latency_diff,_=dfs_rebuild_latency(son,childs,results,latency_dict)
+            sum_latency_diff+=son_latency_diff
+        else:
+            son_latency_diff,son_rebuild_latency=dfs_rebuild_latency(son,childs,results,latency_dict,0,free_latency)
+            free_latency-=son_rebuild_latency
+            sum_latency_diff+=son_latency_diff
     return sum_latency_diff,rebuild_latency
                                           
 
@@ -198,9 +219,9 @@ def test_Distribution(distName,traces,duration_results,latency_results):
             if isError(span):
                 sum_error_span+=1
         duration_diff,_=dfs_rebuild_duration(root,childs,duration_results)
-        #latency_diff,_=dfs_rebuild_latency(root,childs,latency_results) #Todo
+        latency_diff,_=dfs_rebuild_latency(root,childs,latency_results,trace.latency_dict) #Todo
         sum_duration_diff+=duration_diff
-        #sum_latency_diff+=latency_diff
+        sum_latency_diff+=latency_diff
 
     print(f"sum_span:{sum_span} sum_error_span:{sum_error_span} sum_normal_span:{sum_span-sum_error_span}")
     print(f"{distName} distribution duration similarity:{1-sum_duration_diff/(sum_span-sum_error_span)}")    
