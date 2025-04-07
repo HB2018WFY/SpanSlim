@@ -305,8 +305,8 @@ def build_Distribution(distName, value_dict):
         else:
             raise ValueError(f"未知的分布类型: {distName}")
     return results
-'''
-def show_distribution(duration_dict):
+
+def show_distribution(duration_dict,name):
      for key, durations in duration_dict.items():
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
         #直方图 
@@ -317,12 +317,12 @@ def show_distribution(duration_dict):
             color="skyblue",
             edgecolor="black"
         )
-        ax1.set_title(f"Duration Distribution for {key}")
-        ax1.set_xlabel("Duration (ms)")
+        ax1.set_title(f"{name} Distribution for {key}")
+        ax1.set_xlabel(f"{name} (ms)")
         ax1.set_ylabel("Frequency")
         plt.tight_layout()
         plt.show()
-'''
+
 def get_key(span):
     instance = span.instance
     operation = span.operation
@@ -353,6 +353,8 @@ def make_metric_dict(traces, metric_type):
                 value = latency_dict[span.getSpanId()]  # 假设 span 有该属性
                # print(value)
               #  print(span.parentSpanId,value)
+            elif metric_type == 'startTime':
+                value = span.startTime
             else:
                 raise ValueError(f"Unsupported metric_type: {metric_type}")
             
@@ -367,6 +369,9 @@ def build_latency(traces):
     for trace in traces:
         childs=build_childs(trace)
         for span in trace.getSpans():
+            print(span.toString())
+            print(span.startTime)
+            print(span.instance)
             #print(span.getParentId())
             if span.getParentId() == '-1':
                 #print(span.getSpanId(),"wa")
@@ -387,8 +392,8 @@ if __name__ == "__main__":
 
     traces = data_collect(f'{args.dataDir}/{args.dataSet}')
     
-    #真实分布
-    #show_distribution(duration_dict)  
+   
+    
     dists = [
         "normal",
         "expon",
@@ -400,7 +405,12 @@ if __name__ == "__main__":
     build_latency(traces)
     duration_dict=make_metric_dict(traces,'duration')
     latency_dict=make_metric_dict(traces,"latency")
-
+    startTime_dict=make_metric_dict(traces,"startTime")
+    #真实分布
+    #show_distribution(duration_dict)
+    show_distribution(startTime_dict,"startTime")  
+    #show_distribution(latency_dict)  
+    
     for dist in dists:
         results_duration = build_Distribution(dist,duration_dict)
         results_latency = build_Distribution(dist,latency_dict)
